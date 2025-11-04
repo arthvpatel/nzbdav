@@ -1,0 +1,167 @@
+Perfect! Here's a GitHub-flavored Markdown section you can copy and paste directly into your existing `README.md` or create a new `UNRAID.md` file. It matches the style and formatting of your current documentation, including centered images, consistent headings, and clean code blocks.
+
+---
+
+# 🧭 Unraid Setup
+
+<p align="center">
+  <img width="1101" height="238" alt="unraid-banner" src="https://github.com/user-attachments/assets/b14165f4-24ff-4abe-8af6-3ca852e781d4" />
+</p>
+
+This guide walks you through deploying NzbDAV on Unraid using Docker, rclone, and the User Scripts plugin. It ensures consistent access to your media via WebDAV across Sonarr, Radarr, Plex, and other containers.
+
+---
+
+## 🔌 Required Plugins
+
+Install the following via Community Applications:
+
+- `rclone` – for WebDAV mounting  
+- `User Scripts` – to automate startup tasks
+
+---
+
+## 🐳 Docker Container
+
+Install the **NzbDAV** container from the Unraid App Store. It should expose a WebDAV endpoint (e.g., `http://localhost:8080/`).
+
+---
+
+## 📁 Directory Structure
+
+Create the following directories via terminal or Unraid file manager:
+
+```bash
+mkdir -p /mnt/user/nzbdav/mount
+mkdir -p /mnt/user/nzbdav/media/movies
+mkdir -p /mnt/user/nzbdav/media/tv
+```
+
+---
+
+## ⚙️ rclone Configuration
+
+Go to **Settings > rclone** in Unraid and add the following remote:
+
+```ini
+[nzb-dav]
+type = webdav
+url = http://<your-endpoint>
+vendor = other
+user = <your-webdav-user>
+pass = <your-obscured-password>
+```
+
+To generate the password securely:
+
+```bash
+rclone obscure 'your-password'
+```
+
+More info: [rclone obscure](https://rclone.org/commands/rclone_obscure)
+
+---
+
+## 📦 Container Path Mapping
+
+Update volume mappings for **all containers** (including `NzbDAV`, `Sonarr`, `Radarr`, `Plex`, etc.):
+
+```
+Host Path: /mnt/user/nzbdav
+Container Path: /mnt/user/nzbdav
+```
+
+This ensures consistent access to:
+
+- WebDAV mount: `/mnt/user/nzbdav/mount`
+- Media folders:
+  - Movies: `/mnt/user/nzbdav/media/movies`
+  - TV Shows: `/mnt/user/nzbdav/media/tv`
+
+---
+
+## 🚀 Startup Script
+
+Create a new script in the **User Scripts plugin** and set it to run at **Array Start**. Paste the following:
+
+```bash
+#!/bin/bash
+
+# === SETTINGS ===
+RCLONE_REMOTE_PATH="nzb-dav:"
+MOUNT_POINT="/mnt/user/nzbdav/mount"
+CACHE_PATH="/dev/shm"
+REMOTE_NAME="NzbDAV"
+WAIT_TIME=10
+DOCKER_CONTAINERS=( "sonarrnzb" "radarrnzb" "plex" )
+
+sleep "$WAIT_TIME"
+
+echo "🚀 Starting nzbdav container..."
+docker start "$REMOTE_NAME"
+
+echo "🔍 Checking if $REMOTE_NAME is running..."
+if docker ps --filter "name=$REMOTE_NAME" --filter "status=running" | grep -q "$REMOTE_NAME"; then
+    echo "✅ $REMOTE_NAME is running."
+else
+    echo "❌ $REMOTE_NAME failed to start. Exiting."
+    exit 1
+fi
+
+echo "⏳ Waiting $WAIT_TIME seconds for $REMOTE_NAME to be ready..."
+sleep "$WAIT_TIME"
+
+echo "📂 Mounting WebDAV to $MOUNT_POINT..."
+mkdir -p "$MOUNT_POINT"
+
+if mountpoint -q "$MOUNT_POINT"; then
+    echo "🔄 Unmounting existing mount..."
+    fusermount -u "$MOUNT_POINT"
+fi
+
+rclone mount "$RCLONE_REMOTE_PATH" "$MOUNT_POINT" \
+  --vfs-read-ahead=256M \
+  --vfs-read-chunk-size=64M \
+  --vfs-read-chunk-size-limit=4G \
+  --vfs-cache-mode=full \
+  --vfs-cache-max-age=3h \
+  --vfs-cache-max-size=25G \
+  --buffer-size=64M \
+  --dir-cache-time=1s \
+  --log-file=/var/log/rclone-nzbdav.log \
+  --cache-dir="$CACHE_PATH" \
+  --allow-other \
+  --links \
+  --use-cookies \
+  --uid=1000 \
+  --gid=1000 &
+
+sleep 2
+
+if mountpoint -q "$MOUNT_POINT"; then
+    echo "✅ WebDAV mounted successfully."
+else
+    echo "❌ Failed to mount WebDAV."
+    exit 1
+fi
+
+echo "📦 Starting specified Docker containers..."
+for container in "${DOCKER_CONTAINERS[@]}"; do
+    echo "▶️ Starting $container..."
+    docker start "$container"
+done
+
+echo "🎉 All tasks completed."
+```
+
+---
+
+## ✅ Final Checks
+
+- Confirm `/mnt/user/nzbdav/mount` is populated  
+- Ensure Sonarr, Radarr, and Plex can access the media folders  
+- Check logs at `/var/log/rclone-nzbdav.log` for troubleshooting
+
+---
+
+Let me know if you'd like to add healthchecks, auto-remount logic, or tagging support for media formats!
